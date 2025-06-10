@@ -1,0 +1,17 @@
+---
+log_dir: "/home/dariusp/"
+allowed_ssh_users: dariusp
+allowed_ssh_ports: 22
+disable_services:
+  - cups
+  - bluetooth
+sysctl_hardening:
+   net.ipv4.ip_forward: 0
+   net.ipv4.conf.all.accept_source_route: 0
+   net.ipv4.conf.all.accept_redirects: 0
+   net.ipv4.conf.all.send_redirects: 0
+   net.ipv4.conf.all.log_martians: 1
+   net.ipv4.icmp_echo_ignore_broadcasts: 1
+   net.ipv4.tcp_syncookies: 1
+email_addr:
+  - dariuspdevops@outlook.com
