@@ -1,0 +1,170 @@
+---
+- name: Patch all CentOS & RHEL servers
+  hosts: test
+  become: yes
+#  environment: "{{ proxy_env }}"
+
+  vars_files:
+    - /home/user/vars.yml
+    - /home/user/vault.yml
+
+  tasks:
+
+    - name: Stop crond service
+      service:
+        name: crond
+        state: stopped
+      ignore_errors: yes
+      tags: updates
+
+    - name: Create reports directory
+      file:
+        path: /home/user/patching_reports
+        state: directory
+        mode: '0755'
+      tags: reports
+
+    - name: Create new reports files
+      file:
+        path: /home/user/patching_reports/yum_updates.report{{ item }}
+        state: touch
+        mode: '0666'
+      loop:
+        - -a.tmp
+        - -b.tmp
+        - .report.body
+        - .report.header
+        - .report
+      tags: reports
+
+    - name: Set kernel retention to 2 versions
+      lineinfile:
+        path: /etc/yum.conf
+        regexp: '^installonly_limit=(.*)'
+        line: 'installonly_limit=2'
+        backrefs: yes
+      tags: updates
+
+    - name: Run yum clean all
+      command: yum clean all
+      tags: updates
+
+    - name: Check for available yum updates
+      shell: yum check-update | grep -v '^$' | wc -l
+      register: package_count
+      changed_when: false
+
+
+    - name: Show number of packages available for update
+      debug:
+        msg: "Packages available for update: {{ package_count.stdout }}"
+      when: package_count.stdout | int > 0
+
+    - name: Create report header
+      shell: |
+        echo "Yum OS Patching Report" > /home/user/patching_reports/yum_updates.report.header
+        echo "--------------------------------" >> /home/user/patching_reports/yum_updates.report.header
+        echo "Date          : `date`" >> /home/user/patching_reports/yum_updates.report.header
+        echo "Machine       : {{ inventory_hostname }}" >> /home/user/patching_reports/yum_updates.report.header
+        echo " " >> /home/user/patching_reports/yum_updates.report.header
+        echo "Starting OS Version    : `cat /etc/os-release`" >> /home/user/patching_reports/yum_updates.report.header
+        echo "Starting Kernel Version: `uname -r`" >> /home/user/patching_reports/yum_updates.report.header
+        echo " " >> /home/user/patching_reports/yum_updates.report.header
+      tags: reports
+
+    - name: Create report body
+      shell: |
+        echo "PACKAGES TO BE UPDATED" >> /home/user/patching_reports/yum_updates.report.body
+        echo "----------------------" >> /home/user/patching_reports/yum_updates.report.body
+        cat /home/user/patching_reports/yum_updates.report-b.tmp >> /home/user/patching_reports/yum_updates.report.body
+      register: package_name
+      when: package_count.stdout | int > 0
+      tags: reports
+
+    - name: Check memory
+      shell: free -m | grep Mem | awk '{ print $4 }'
+      register: free_mem
+      tags: updates
+
+    - name: Clear memory
+      shell: sync; echo 1 > /proc/sys/vm/drop_caches
+      when: free_mem.stdout | int < 384
+      tags: updates
+
+    - name: Recheck memory
+      shell: free -m | grep Mem | awk '{ print $4 }'
+      register: free_mem2
+      tags: updates
+
+    - name: Report systems without enough memory
+      debug:
+        msg: "WARNING: This system does not have enough memory to patch. Please reboot and try again."
+      when: free_mem2.stdout | int < 384
+      failed_when: free_mem2.stdout | int < 384
+      tags: updates
+
+    - name: Upgrade packages via yum with verbose output
+      shell: |
+        yum -v -y update > /home/user/patching_reports/yum_update_verbose.log 2>&1
+      register: yum_update_result
+      async: 1800
+      poll: 60
+      tags: updates
+
+    - name: Print errors if yum failed
+      debug:
+        msg: "yum command produced errors"
+      when: yumcommandout is not defined
+      tags: updates
+
+    - name: Make sure kernel installed
+      tags:
+      - updates
+      - kernel
+
+      block:
+        - name: Check if new kernel was installed
+          shell: /usr/bin/needs-restarting -r || /bin/true
+          register: check_kernel
+          changed_when: False
+
+        - name: Find new initramfs version
+          shell: "needs-restarting -r | grep kernel | awk '{ print $3 }'"
+          register: initramfs
+          when: "'kernel -> 3' in check_kernel.stdout"
+          changed_when: False
+
+        - name: Make sure new initramfs is present
+          shell: "ls /boot/initramfs-{{ initramfs.stdout }}.x86_64.img"
+          when: "'kernel -> 3' in check_kernel.stdout"
+          changed_when: False
+
+      rescue:
+        - name: Recreate initramfs
+          shell: dracut --kver `needs-restarting -r | grep kernel | awk '{ print $3 }'`.x86_64
+
+    - name: Compile reports
+      shell: |
+        echo "Ending OS Version      : `cat /etc/os-release`" >> /home/user/patching_reports/yum_updates.report.header
+        echo "Ending Kernel Version  : `needs-restarting -r | grep kernel | awk '{ print $3 }'`.x86_64" >> /home/user/patching_reports/yum_updates.report.header
+        echo " " >> /home/user/patching_reports/yum_updates.report.header
+        echo " " >> /home/user/patching_reports/yum_updates.report.header
+        cat /home/user/patching_reports/yum_updates.report.header > /home/user/patching_reports/yum_updates.report
+        cat /home/user/patching_reports/yum_updates.report.header >> /home/user/patching_reports/yum_updates.report
+      tags: reports
+
+    - name: Convert report file into .txt file
+      copy:
+        src: /home/user/patching_reports/yum_updates.report
+        dest: /home/user/patching_reports/yum_report.txt
+      tags: report
+
+    - name: Email compiled report via s-nail
+      shell: |
+        mailx -s "YUM Patch Report - {{ ansible_date_time.date }}" \
+          -a /home/user/patching_reports/yum_report.txt \
+          userdevops@outlook.com < /dev/null
+      environment:
+        MAILRC: /etc/s-nail.rc
+      tags: report
+                                                                                
