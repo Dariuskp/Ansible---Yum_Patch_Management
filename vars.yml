@@ -1,6 +1,6 @@
 ---
-log_dir: "/home/dariusp/"
-allowed_ssh_users: dariusp
+log_dir: "/home/user/"
+allowed_ssh_users: user
 allowed_ssh_ports: 22
 disable_services:
   - cups
@@ -14,4 +14,4 @@ sysctl_hardening:
    net.ipv4.icmp_echo_ignore_broadcasts: 1
    net.ipv4.tcp_syncookies: 1
 email_addr:
-  - dariuspdevops@outlook.com
+  - userdevops@outlook.com
